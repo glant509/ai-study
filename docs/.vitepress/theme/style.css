@@ -30,7 +30,120 @@ body { letter-spacing: .01em; }
 .VPFeature { border: 1px solid var(--vp-c-divider) !important; background: var(--vp-c-bg-soft) !important; }
 .VPHero .name, .VPHero .text { max-width: 760px; }
 .VPHero .tagline { max-width: 650px; line-height: 1.7; }
-.mermaid { margin: 32px 0; overflow-x: auto; }
+.mermaid {
+  position: relative;
+  margin: 32px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: zoom-in;
+  transition: border-color .2s, background-color .2s;
+}
+.mermaid:hover {
+  border-color: var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+.mermaid::after {
+  content: "点击放大";
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 999px;
+  color: var(--vp-c-text-2);
+  background: color-mix(in srgb, var(--vp-c-bg) 88%, transparent);
+  font-size: 12px;
+  line-height: 1.4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s;
+}
+.mermaid:hover::after { opacity: 1; }
+body.mermaid-zoom-open { overflow: hidden; }
+.mermaid-zoom {
+  position: fixed;
+  z-index: 9999;
+  inset: 0;
+  color: var(--vp-c-text-1);
+  background: color-mix(in srgb, var(--vp-c-bg) 96%, transparent);
+  backdrop-filter: blur(10px);
+}
+.mermaid-zoom__toolbar {
+  position: absolute;
+  z-index: 2;
+  top: 18px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 12px;
+  background: var(--vp-c-bg);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, .16);
+  transform: translateX(-50%);
+}
+.mermaid-zoom__toolbar button {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg-soft);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.mermaid-zoom__toolbar button:hover { background: var(--vp-c-brand-soft); }
+.mermaid-zoom__toolbar span {
+  min-width: 48px;
+  text-align: center;
+  color: var(--vp-c-text-2);
+  font-size: 13px;
+}
+.mermaid-zoom__close { font-size: 20px !important; }
+.mermaid-zoom__viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.mermaid-zoom__viewport.is-dragging { cursor: grabbing; }
+.mermaid-zoom__canvas {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(1100px, 88vw);
+  transform-origin: center;
+  transition: transform .08s ease-out;
+  will-change: transform;
+}
+.mermaid-zoom__viewport.is-dragging .mermaid-zoom__canvas { transition: none; }
+.mermaid-zoom__canvas svg {
+  display: block;
+  width: 100% !important;
+  max-width: none !important;
+  height: auto !important;
+  margin: auto;
+}
+.mermaid-zoom__hint {
+  position: absolute;
+  bottom: 18px;
+  left: 50%;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-bg-soft);
+  font-size: 12px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
 .doc-comments {
   max-width: 780px;
   margin: 52px auto 8px;
@@ -83,4 +196,9 @@ body { letter-spacing: .01em; }
   .vp-doc table { display: block; overflow-x: auto; white-space: nowrap; }
   .VPHero .main { text-align: left; }
   .doc-comments { margin-top: 40px; padding: 18px; border-radius: 14px; }
+  .mermaid::after { opacity: 1; }
+  .mermaid-zoom__toolbar { top: 10px; }
+  .mermaid-zoom__reset { display: none; }
+  .mermaid-zoom__canvas { width: 92vw; }
+  .mermaid-zoom__hint { bottom: 10px; }
 }
