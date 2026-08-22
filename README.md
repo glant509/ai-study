@@ -1,6 +1,6 @@
 # AI Agent 工程学习手册
 
-一个可直接部署到 GitHub Pages 的 VitePress + Markdown + PWA 中文学习站点。包含响应式 PC / 手机布局、本地全文搜索、Mermaid、代码高亮、离线缓存与自动部署。
+一个可直接部署到 GitHub Pages 的 VitePress + Markdown 中文学习站点。包含响应式 PC / 手机布局、本地全文搜索、Mermaid、代码高亮与自动部署。
 
 ## 本地开发
 
@@ -73,11 +73,9 @@ VITEPRESS_REPO_NAME= VITEPRESS_BASE=/ npm run docs:build
 
 > GitHub Pages 的 DNS 记录与界面可能调整，绑定时以 GitHub Pages 设置页给出的校验结果为准。
 
-## PWA 与离线使用
+## 页面更新与缓存
 
-部署后首次联网打开站点，浏览器会注册 Service Worker 并缓存站点资源。iPhone / iPad 可在 Safari 分享菜单选择“添加到主屏幕”；Android Chrome 可选择“安装应用”。更新会在后台下载，并在后续访问生效。
-
-离线能力依赖用户至少成功访问过一次站点。`file://` 直接打开构建文件不支持 Service Worker，请通过 GitHub Pages 或本地 HTTP 服务访问。
+站点按普通无状态 Web 应用运行，不注册 Service Worker，也不提供 PWA 离线缓存。访问或刷新页面时，浏览器直接向 GitHub Pages 检查最新内容。页面包含旧版本 PWA 的一次性清理逻辑，会注销本项目遗留的 Service Worker 并删除对应的 Workbox Cache Storage。
 
 ## 文档评论
 

@@ -1,11 +1,32 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
-import { withPwa } from '@vite-pwa/vitepress'
 
 const repoName = process.env.VITEPRESS_REPO_NAME ?? 'ai-agent-handbook'
 const base = process.env.VITEPRESS_BASE ?? (repoName ? `/${repoName}/` : '/')
+const stalePwaCleanup = `
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', async () => {
+    const scopePath = ${JSON.stringify(base)};
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(
+      registrations
+        .filter((registration) => new URL(registration.scope).pathname.startsWith(scopePath))
+        .map((registration) => registration.unregister())
+    );
+    if ('caches' in window) {
+      const marker = scopePath === '/' ? location.origin : location.origin + scopePath;
+      const keys = await caches.keys();
+      await Promise.all(
+        keys
+          .filter((key) => key.includes(marker) || (scopePath === '/' && key.startsWith('workbox-')))
+          .map((key) => caches.delete(key))
+      );
+    }
+  });
+}
+`
 
-export default withPwa(withMermaid(defineConfig({
+export default withMermaid(defineConfig({
   lang: 'zh-CN',
   title: 'AI Agent 工程学习手册',
   description: '从 LLM 原理到 Agent Infrastructure 的工程化学习路径',
@@ -16,7 +37,8 @@ export default withPwa(withMermaid(defineConfig({
     ['meta', { name: 'theme-color', content: '#0f766e' }],
     ['meta', { name: 'apple-mobile-web-app-capable', content: 'yes' }],
     ['meta', { name: 'apple-mobile-web-app-status-bar-style', content: 'default' }],
-    ['link', { rel: 'icon', href: `${base}icon.svg`, type: 'image/svg+xml' }]
+    ['link', { rel: 'icon', href: `${base}icon.svg`, type: 'image/svg+xml' }],
+    ['script', {}, stalePwaCleanup]
   ],
   markdown: {
     lineNumbers: true,
@@ -98,24 +120,4 @@ export default withPwa(withMermaid(defineConfig({
   },
   sitemap: { hostname: process.env.VITEPRESS_SITE_URL ?? 'https://username.github.io/ai-agent-handbook/' },
   mermaid: { theme: 'base' }
-}), {
-  registerType: 'autoUpdate',
-  includeAssets: ['icon.svg'],
-  manifest: {
-    name: 'AI Agent 工程学习手册',
-    short_name: 'Agent 手册',
-    description: '从 LLM 原理到 Agent Infrastructure 的工程化学习路径',
-    theme_color: '#0f766e',
-    background_color: '#f7f8f5',
-    display: 'standalone',
-    start_url: base,
-    scope: base,
-    lang: 'zh-CN',
-    icons: [{ src: `${base}icon.svg`, sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }]
-  },
-  workbox: {
-    globPatterns: ['**/*.{css,js,html,svg,woff2}'],
-    navigateFallback: `${base}index.html`,
-    cleanupOutdatedCaches: true
-  }
 }))
