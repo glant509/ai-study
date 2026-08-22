@@ -207,6 +207,296 @@ flowchart LR
 
 最重要的边界是：**Tokenizer 负责文本与离散 ID 之间的转换；Embedding 才开始进入神经网络的连续数值空间；Transformer 则负责结合上下文计算和生成。** 把这三层分清，后续理解 Attention、KV Cache、上下文窗口和模型输出会容易很多。
 
+## 用 OpenAI 接口观察输入与返回
+
+理解 OpenAI 的调用方式时，要先区分两个层次：
+
+1. **OpenAI Responses API** 是托管模型接口。开发者提交文本或结构化消息，服务端完成 Tokenizer、模型推理和解码，返回生成结果与 token 用量。
+2. **tiktoken** 是 OpenAI 开源的本地 Tokenizer 库。开发者可以直接调用 `encode`、`decode`，观察 token ID 和字节，还可以阅读具体源码。
+
+Responses API 并不会把 Normalization、Pre-tokenization、BPE 每次合并等内部过程逐层返回。线上服务把这些实现细节封装在模型后面。需要理解 Tokenizer 内部逻辑时，应在本地使用 `tiktoken`，而不是期待模型 API 返回全部中间状态。
+
+### OpenAI Responses API：提交文本
+
+安装官方 Python SDK：
+
+```bash
+pip install openai
+```
+
+最小调用如下：
+
+```python
+from openai import OpenAI
+
+client = OpenAI()
+
+response = client.responses.create(
+    model="gpt-5",
+    input="Agent 调用 tool 是什么意思？",
+)
+
+print(response.output_text)
+print(response.usage)
+```
+
+`responses.create` 的关键输入可以从程序员视角理解为：
+
+```python
+response = client.responses.create(
+    model="gpt-5",       # 选择模型，也间接决定服务端使用的编码与模板
+    input="...",         # 字符串，或包含多条消息/内容块的结构化输入
+    max_output_tokens=300 # 为模型输出设置上限
+)
+```
+
+返回对象不是 token ID 数组，而是包含输出内容、状态和用量信息的 Response。简化后的结构类似：
+
+```json
+{
+  "id": "resp_...",
+  "status": "completed",
+  "output": [
+    {
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "……模型生成的回答……"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 18,
+    "output_tokens": 86,
+    "total_tokens": 104
+  }
+}
+```
+
+这里的数字仅用于说明字段含义，真实 token 数由模型、输入内容、工具定义和请求格式决定。不要把示例数字写进容量逻辑。
+
+常用返回字段：
+
+| Python 属性 | 含义 |
+| --- | --- |
+| `response.id` | 本次响应的唯一标识 |
+| `response.status` | 请求是否完成 |
+| `response.output` | 完整的结构化输出项 |
+| `response.output_text` | SDK 聚合出的文本快捷属性 |
+| `response.usage.input_tokens` | 服务端实际统计的输入 token |
+| `response.usage.output_tokens` | 模型生成所消耗的输出 token |
+| `response.usage.total_tokens` | 总 token 用量 |
+
+生产计费与观测应优先使用响应中的 `usage`，因为它反映服务端最终采用的完整请求，包括可能存在的消息模板与工具相关开销。本地估算主要用于请求发送前的预算和裁剪。
+
+官方入口：
+
+- [OpenAI 文本生成指南](https://developers.openai.com/api/docs/guides/text)
+- [Responses create API Reference](https://developers.openai.com/api/reference/resources/responses/methods/create)
+
+### tiktoken：直接查看 Encode 的输入与返回
+
+[tiktoken](https://github.com/openai/tiktoken) 是 OpenAI 发布的开源 BPE Tokenizer。安装后可以直接观察文本如何变成 token ID：
+
+```bash
+pip install tiktoken
+```
+
+```python
+import tiktoken
+
+# 使用编码名称可以让实验结果更稳定；模型到编码的映射可能随模型发布而扩展。
+encoding = tiktoken.get_encoding("o200k_base")
+
+text = "Agent 调用 tool"
+token_ids: list[int] = encoding.encode(text)
+
+print("input:", repr(text))
+print("return:", token_ids)
+print("count:", len(token_ids))
+```
+
+方法的概念签名是：
+
+```python
+Encoding.encode(
+    text: str,
+    *,
+    allowed_special: set[str] | Literal["all"] = set(),
+    disallowed_special: Collection[str] | Literal["all"] = "all",
+) -> list[int]
+```
+
+- 输入 `text` 是 Python Unicode 字符串。
+- 返回值是 `list[int]`，每个整数都是词表中的 token ID。
+- `allowed_special` 决定哪些特殊字符串可以按特殊 token 编码。
+- 默认情况下，文本若包含已注册但不允许出现的特殊 token 字符串，会抛出异常，防止普通内容意外突破协议边界。
+
+如果只想把文本当普通内容编码，不把任何字符串解释成特殊 token，可以使用：
+
+```python
+token_ids = encoding.encode_ordinary("<|endoftext|> 只是示例文本")
+```
+
+它的返回值仍然是 `list[int]`，但输入中的特殊标记文本会按普通字符序列处理。
+
+### tiktoken：查看每个 ID 对应的原始字节
+
+不要直接假设一个 token ID 必然对应一个完整 Unicode 字符。更可靠的研究方式是调用 `decode_single_token_bytes`：
+
+```python
+rows = []
+
+for position, token_id in enumerate(token_ids):
+    raw: bytes = encoding.decode_single_token_bytes(token_id)
+    rows.append({
+        "position": position,
+        "token_id": token_id,
+        "bytes_hex": raw.hex(" "),
+        "bytes_repr": repr(raw),
+        "text_if_complete": raw.decode("utf-8", errors="replace"),
+    })
+
+for row in rows:
+    print(row)
+```
+
+方法的概念签名：
+
+```python
+Encoding.decode_single_token_bytes(token: int) -> bytes
+```
+
+它返回 `bytes` 而不是 `str`，因为单个 token 可能只包含某个 UTF-8 字符的一部分。`errors="replace"` 只适合调试显示；不要把替换字符后的结果拿来恢复原文。
+
+### tiktoken：把 Token ID 序列还原为文本
+
+```python
+decoded: str = encoding.decode(token_ids)
+
+print("decoded:", repr(decoded))
+print("round_trip:", decoded == text)
+```
+
+概念签名：
+
+```python
+Encoding.decode(tokens: Sequence[int], errors: str = "replace") -> str
+```
+
+`decode` 会先把所有 token 对应的字节连接起来，再按 UTF-8 解码，因此它比逐 token 转成字符串更可靠。对需要严格验证无损往返的系统，也可以先获得完整字节：
+
+```python
+decoded_bytes: bytes = encoding.decode_bytes(token_ids)
+assert decoded_bytes == text.encode("utf-8")
+```
+
+### 一段可直接运行的完整研究程序
+
+下面的程序把输入、ID、单 token 字节和最终返回放在一起，适合作为本章实验起点：
+
+```python
+from dataclasses import asdict, dataclass
+import json
+import tiktoken
+
+
+@dataclass
+class TokenView:
+    position: int
+    token_id: int
+    bytes_hex: str
+    bytes_text: str
+
+
+def inspect_tokens(text: str, encoding_name: str = "o200k_base") -> dict:
+    encoding = tiktoken.get_encoding(encoding_name)
+    token_ids = encoding.encode(text)
+
+    tokens = []
+    for position, token_id in enumerate(token_ids):
+        raw = encoding.decode_single_token_bytes(token_id)
+        tokens.append(TokenView(
+            position=position,
+            token_id=token_id,
+            bytes_hex=raw.hex(" "),
+            bytes_text=raw.decode("utf-8", errors="replace"),
+        ))
+
+    decoded_bytes = encoding.decode_bytes(token_ids)
+    decoded_text = decoded_bytes.decode("utf-8")
+
+    return {
+        "encoding": encoding.name,
+        "input": text,
+        "input_chars": len(text),
+        "input_bytes": len(text.encode("utf-8")),
+        "token_count": len(token_ids),
+        "token_ids": token_ids,
+        "tokens": [asdict(token) for token in tokens],
+        "decoded": decoded_text,
+        "round_trip": decoded_text == text,
+    }
+
+
+if __name__ == "__main__":
+    result = inspect_tokens("Agent 调用 tool 👨‍👩‍👧‍👦")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+```
+
+程序返回的结构大致如下：
+
+```json
+{
+  "encoding": "o200k_base",
+  "input": "Agent 调用 tool 👨‍👩‍👧‍👦",
+  "input_chars": 21,
+  "input_bytes": 43,
+  "token_count": "以本机实际执行结果为准",
+  "token_ids": ["以本机实际执行结果为准"],
+  "tokens": [
+    {
+      "position": 0,
+      "token_id": 变量中的真实整数,
+      "bytes_hex": "实际字节的十六进制",
+      "bytes_text": "可显示文本或替换字符"
+    }
+  ],
+  "decoded": "Agent 调用 tool 👨‍👩‍👧‍👦",
+  "round_trip": true
+}
+```
+
+示例故意不硬编码 token ID，因为读者应运行程序观察目标编码的真实结果，避免把某个版本的输出误认为跨模型标准。
+
+### 从哪里开始阅读开源源码
+
+tiktoken 仓库中最值得程序员研究的入口包括：
+
+- [`tiktoken/core.py`](https://github.com/openai/tiktoken/blob/main/tiktoken/core.py)：Python `Encoding` 类，包含 `encode`、`decode`、`decode_bytes` 等公开方法。
+- [`tiktoken_ext/openai_public.py`](https://github.com/openai/tiktoken/blob/main/tiktoken_ext/openai_public.py)：OpenAI 公共编码的构造方式、特殊 token 和编码注册信息。
+- [`src/lib.rs`](https://github.com/openai/tiktoken/blob/main/src/lib.rs)：Python 与 Rust 核心之间的绑定入口。
+- [`src/py.rs`](https://github.com/openai/tiktoken/blob/main/src/py.rs)：暴露给 Python 的核心编码实现。
+- [`tiktoken/_educational.py`](https://github.com/openai/tiktoken/blob/main/tiktoken/_educational.py)：更适合学习的 BPE 训练与编码实现，性能不是重点，但步骤更容易阅读。
+
+推荐阅读顺序是 `_educational.py -> core.py -> openai_public.py -> Rust 实现`。先用教学实现理解算法，再追踪生产实现的性能优化和 Python/Rust 边界。
+
+### OpenAI API 与 tiktoken 的职责对照
+
+| 目标 | 应使用的接口 | 输入 | 返回 |
+| --- | --- | --- | --- |
+| 调用托管模型生成回答 | `client.responses.create` | 文本或结构化 input | Response、输出文本、usage |
+| 本地把文本编码为 ID | `encoding.encode` | `str` | `list[int]` |
+| 查看单 token 原始内容 | `decode_single_token_bytes` | 单个 token ID | `bytes` |
+| 把完整 ID 序列还原为文本 | `encoding.decode` | ID 序列 | `str` |
+| 严格验证字节级往返 | `encoding.decode_bytes` | ID 序列 | `bytes` |
+| 研究 BPE 如何训练和合并 | 阅读 `_educational.py` | 训练语料与词表大小 | 合并规则与编码结果 |
+
+工程上应同时保留两类测试：用 tiktoken 做发送前预算与边界测试，用 Responses API 返回的 `usage` 做服务端实际用量记录。两者数值不一致时，应首先检查模型到编码的映射、结构化消息模板、工具定义和特殊 token 开销。
+
 ## Token、字符、单词不是同一个概念
 
 Token 是 Tokenizer 选择的编码单元，不等于自然语言中的“词”，也不等于 Unicode 字符。
