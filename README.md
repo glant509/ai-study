@@ -81,7 +81,9 @@ VITEPRESS_REPO_NAME= VITEPRESS_BASE=/ npm run docs:build
 
 ## 文档评论
 
-课程页底部集成了基于 GitHub Issues 的评论区。每个文档路径对应一个 Issue，读者使用 GitHub 账号发表评论；评论可以在仓库 Issues 中检索，也方便后续由 Agent 汇总并转化为文档改进。
+评论功能目前默认关闭。课程页已经集成基于 GitHub Issues 的评论区；启用后，每个文档路径对应一个 Issue，读者使用 GitHub 账号发表评论，评论可以在仓库 Issues 中检索，也方便后续由 Agent 汇总并转化为文档改进。
+
+需要重新开启时，在构建环境中设置 `VITEPRESS_COMMENTS=true`；默认值或 `false` 均不会渲染评论区，也不会加载第三方评论脚本。
 
 首次启用需要完成一次仓库授权：
 

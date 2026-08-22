@@ -93,6 +93,7 @@ export default withPwa(withMermaid(defineConfig({
     darkModeSwitchLabel: '外观',
     sidebarMenuLabel: '目录',
     returnToTopLabel: '返回顶部',
+    commentsEnabled: process.env.VITEPRESS_COMMENTS === 'true',
     commentRepo: process.env.VITEPRESS_COMMENT_REPO ?? 'glant509/ai-study'
   },
   sitemap: { hostname: process.env.VITEPRESS_SITE_URL ?? 'https://username.github.io/ai-agent-handbook/' },

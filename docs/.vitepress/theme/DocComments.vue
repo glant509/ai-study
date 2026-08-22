@@ -6,7 +6,10 @@ const route = useRoute()
 const { frontmatter, isDark, theme } = useData()
 const container = ref<HTMLElement | null>(null)
 
-const commentsEnabled = () => frontmatter.value.layout !== 'home' && frontmatter.value.comments !== false
+const commentsEnabled = () =>
+  theme.value.commentsEnabled === true &&
+  frontmatter.value.layout !== 'home' &&
+  frontmatter.value.comments !== false
 
 function renderComments() {
   if (!container.value || !commentsEnabled()) return
