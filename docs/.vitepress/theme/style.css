@@ -31,10 +31,56 @@ body { letter-spacing: .01em; }
 .VPHero .name, .VPHero .text { max-width: 760px; }
 .VPHero .tagline { max-width: 650px; line-height: 1.7; }
 .mermaid { margin: 32px 0; overflow-x: auto; }
+.doc-comments {
+  max-width: 780px;
+  margin: 52px auto 8px;
+  padding: 24px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 16px;
+  background: var(--vp-c-bg-soft);
+}
+.doc-comments__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.doc-comments__heading h2 {
+  margin: 2px 0 0;
+  border: 0;
+  padding: 0;
+  font-size: 20px;
+  line-height: 1.4;
+}
+.doc-comments__eyebrow {
+  margin: 0;
+  color: var(--vp-c-brand-1);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .12em;
+}
+.doc-comments__badge {
+  flex: none;
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-bg);
+  font-size: 12px;
+  font-weight: 600;
+}
+.doc-comments__intro {
+  margin: 14px 0 20px;
+  color: var(--vp-c-text-2);
+  font-size: 14px;
+  line-height: 1.7;
+}
+.doc-comments__thread { min-height: 92px; }
+.doc-comments .utterances { max-width: none; }
 @media (max-width: 768px) {
   .vp-doc { font-size: 16px; line-height: 1.78; }
   .VPDoc { padding-left: 22px !important; padding-right: 22px !important; }
   .vp-doc h1 { font-size: 30px; }
   .vp-doc table { display: block; overflow-x: auto; white-space: nowrap; }
   .VPHero .main { text-align: left; }
+  .doc-comments { margin-top: 40px; padding: 18px; border-radius: 14px; }
 }

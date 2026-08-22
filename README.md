@@ -79,6 +79,21 @@ VITEPRESS_REPO_NAME= VITEPRESS_BASE=/ npm run docs:build
 
 离线能力依赖用户至少成功访问过一次站点。`file://` 直接打开构建文件不支持 Service Worker，请通过 GitHub Pages 或本地 HTTP 服务访问。
 
+## 文档评论
+
+课程页底部集成了基于 GitHub Issues 的评论区。每个文档路径对应一个 Issue，读者使用 GitHub 账号发表评论；评论可以在仓库 Issues 中检索，也方便后续由 Agent 汇总并转化为文档改进。
+
+首次启用需要完成一次仓库授权：
+
+1. 确认 GitHub 仓库为公开仓库，并在仓库设置中启用 Issues。
+2. 打开 [Utterances GitHub App](https://github.com/apps/utterances) 并点击 **Install**。
+3. 选择 **Only select repositories**，授权 `glant509/ai-study`。
+4. 等待 GitHub Pages 重新部署，然后打开任意课程页测试评论。
+
+默认评论仓库是 `glant509/ai-study`。如需迁移，在构建环境中设置 `VITEPRESS_COMMENT_REPO=所有者/仓库名`。单篇文档可在 Frontmatter 中设置 `comments: false` 关闭评论。
+
+维护者或 Agent 可按 `文档评论` 标签筛选 Issue。处理完成后，建议在评论中回复对应修改的提交，并关闭该 Issue；页面出现新评论时 Utterances 会重新打开它。
+
 ## 常用配置
 
 - 站点与侧边栏：`docs/.vitepress/config.mts`
