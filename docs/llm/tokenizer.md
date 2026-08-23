@@ -752,3 +752,14 @@ for text in cases:
 ## 延伸思考
 
 Tokenizer 是在模型训练前固定的离散接口。若某种语言在训练语料中占比很低，它的 token 效率和模型能力会受到什么影响？如果可以重新训练 Tokenizer，但模型参数量和上下文窗口不变，又该如何衡量新词表是真的更好，而不只是让某一类基准更短？
+
+## 中文延伸学习资源
+
+以下资源适合在完成本章后继续学习 BPE、Byte-level BPE 与 SentencePiece 的工程实现：
+
+- [BPE 与字节级 Tokenizer：从合并规则到可运行实现](https://tonlp.fun/post/bpe/) — 作者/站点：HuanQ（ToNLP）。包含 BPE 训练、编码、解码、词表持久化以及一份可运行的 Python 参考实现。
+- [Transformer 架构](https://infrasys-ai.github.io/aiinfra-docs/06AlgoData01Basic/README.html) — 来源：AIInfra 中文开源课程。其中“手把手实现核心机制 BPE 分词算法”可作为本章代码练习的补充。
+- [Token 到底是什么？——揭秘大模型背后的“文字压缩术”](https://www.bilibili.com/video/BV1S5miBvEsu/) — 作者：马克的技术工作坊；平台：哔哩哔哩。适合用动画和例子直观理解 Token、BPE 训练过程及 Context Window。
+- [[SentencePiece] Tokenizer 的原理与实现](https://www.cnblogs.com/wildkid1024/p/18379857) — 作者：wildkid1024；平台：博客园。文章结合 Google SentencePiece 源码讲解链式数据结构、pair 合并与优先队列实现。
+
+> **版权与来源说明：** 本节仅提供外部学习资源的标题、作者/机构、发布平台、原始链接和简短导读，不转载其正文、图片、代码、字幕或视频。资源版权归各原作者及发布平台所有；引用或二次使用时，请遵守来源页面标注的许可协议与版权要求。外部页面内容和地址可能发生变化，请以原作者页面为准。
