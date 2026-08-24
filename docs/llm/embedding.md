@@ -841,8 +841,9 @@ Embedding 相似度只表示模型认为两段内容在训练出的空间中接�
 
 下面三组资源分别补充经典词向量、现代 LLM 体系和 Embedding 代码实现。阅读时要继续区分 Word2Vec 静态词向量、LLM 的 Token Embedding 和用于检索的文本 Embedding：
 
+- [15分钟弄懂 Token 和 Embedding——详解 LLM 与 RAG 的数据处理机制](https://www.bilibili.com/video/BV1oNv8BPE2m/) — 作者：隔壁的程序员老王；平台：哔哩哔哩。视频从 Token 到向量化串联 LLM 与 RAG 的数据处理过程，适合作为本章的直观导读；观看后再结合本章的矩阵查表、反向传播、Pooling 和向量检索内容深入理解。
 - [《动手学深度学习》词向量相关课程](https://www.bilibili.com/list/ml1790640075?bvid=BV18h411r7Z7&oid=204229678) — 课程作者：李沐等；平台：哔哩哔哩课程列表。重点学习 Word2Vec、Skip-gram、CBOW、负采样以及向量结构如何通过训练形成。Word2Vec 不是现代 LLM Token Embedding 的完整实现，但很适合理解“参数如何从数据中学习出来”。
 - [LLM 前世今生](https://datawhalechina.github.io/base-llm/) — 来源：Datawhale 开源社区。教程从传统词向量、RNN 讲到 Attention、Transformer、BERT、GPT 与 Llama，适合建立静态词向量到上下文化表示的演进脉络。
 - [Transformer 架构](https://infrasys-ai.github.io/aiinfra-docs/06AlgoData01Basic/README.html) — 来源：AIInfra 中文开源课程。其中“手把手实现核心机制 Embedding 词嵌入”可用于对照本章的矩阵查表、张量形状和训练过程。
 
-> **版权与来源说明：** 本节仅提供外部学习资源的标题、作者/机构、发布平台、原始链接和简短导读，不转载其正文、图片、代码、字幕或视频。资源版权归各原作者及发布平台所有；引用或二次使用时，请遵守来源页面标注的许可协议与版权要求。外部页面内容和地址可能发生变化，请以原作者页面为准。
+> **版权与来源说明：** 本节仅提供外部学习资源的标题、作者/机构、发布平台、原始链接和简短导读，不转载其正文、图片、代码、字幕或视频。上述哔哩哔哩视频页面明确标注“未经作者授权，禁止转载”，本站只提供跳转链接，不缓存或内嵌视频。资源版权归各原作者及发布平台所有；引用或二次使用时，请遵守来源页面标注的许可协议与版权要求。外部页面内容和地址可能发生变化，请以原作者页面为准。
