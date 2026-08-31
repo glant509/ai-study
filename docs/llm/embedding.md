@@ -134,6 +134,122 @@ flowchart LR
   C --> D[Embedding 向量]
 ```
 
+### Gather / Index Lookup 到底是什么
+
+`index lookup`（索引查找）描述的是操作目的：**把 Token ID 当作行号，从 Embedding 矩阵中取出对应的行**。`gather`（聚集）是张量框架中实现这类操作的通用名称：它接收一个源张量和一组索引，沿指定维度收集元素。Embedding 查表可以理解为“沿矩阵第 0 维执行 gather”。
+
+假设：
+
+```text
+Embedding 矩阵 E.shape = [V, D]
+输入 Token ID  input_ids.shape = [B, S]
+输出向量      hidden.shape = [B, S, D]
+```
+
+- `V`（vocab size）是词表大小，也就是可以被索引的行数；
+- `D`（hidden size）是每一行的向量长度；
+- `B`（batch size）是一次处理的样本数；
+- `S`（sequence length）是每个样本中的 Token 数量。
+
+输出多出来的最后一维 `D`，是因为输入中的每一个整数 ID 都被替换成了一整行向量。用下标写就是：
+
+```text
+hidden[b, s, :] = E[input_ids[b, s], :]
+```
+
+例如输入为：
+
+```text
+input_ids = [[2, 0],
+             [1, 2]]
+```
+
+查表结果为：
+
+```text
+hidden = [[E[2], E[0]],
+          [E[1], E[2]]]
+```
+
+ID `2` 出现两次，因此前向结果中会出现两份相同的 `E[2]`。这里没有执行“根据 ID 计算向量”的公式，也没有在整个词表里搜索相似项；ID 已经是数组下标，运行时只需定位相应行并读取其中的 `D` 个数。
+
+```mermaid
+flowchart LR
+  I["input_ids<br/>形状 B × S"] --> F["展平索引<br/>共 B × S 个 ID"]
+  E["Embedding 矩阵 E<br/>形状 V × D"] --> G["沿第 0 维 Gather<br/>逐个读取 E[id]"]
+  F --> G
+  G --> R["恢复批次与序列维度<br/>形状 B × S × D"]
+```
+
+#### 与 one-hot 矩阵乘法相比，省在哪里
+
+把 `N = B × S` 个 ID 展平后，理论上可以先创建 `[N, V]` 的 one-hot 矩阵，再与 `[V, D]` 的 `E` 相乘。但 gather 只读取最终需要的 `N` 行：
+
+| 实现 | 中间表示 | 主要计算/读取量 |
+| --- | --- | --- |
+| 显式 one-hot + 矩阵乘法 | `[N, V]`，几乎全是 0 | 按稠密实现约为 `N × V × D` 次乘加 |
+| gather / index lookup | 只保存 `N` 个整数 ID | 读取并输出 `N × D` 个元素 |
+
+当 `V = 100,000` 时，为每个 Token 构造十万个位置的 one-hot 向量显然没有必要。gather 利用了“one-hot 中只有一个位置为 1”这一已知结构，直接跳到目标行。两者数学结果相同，执行路径不同。
+
+#### 前向是 Gather，反向是 Scatter-Add
+
+训练时还需要理解一个容易忽略的细节：前向传播从若干行中“收集”向量，反向传播则把这些位置产生的梯度“放回”对应行。这个反向过程常被理解为 `scatter-add`：
+
+```text
+grad_E[input_ids[b, s], :] += grad_hidden[b, s, :]
+```
+
+之所以是 `+=` 而不是 `=`，是因为同一个 Token ID 可能在一个 batch 中出现多次。所有出现位置对该行产生的梯度要累加起来；本次输入没有访问到的行，来自这次查表操作的梯度为 0。
+
+```text
+input_ids = [2, 0, 2]
+
+grad_E[0] = grad_hidden[1]
+grad_E[2] = grad_hidden[0] + grad_hidden[2]
+```
+
+“只访问少量行”并不意味着优化器一定只保存或更新少量状态。是否真正使用稀疏梯度，取决于框架、`Embedding` 层参数和优化器是否支持；大型语言模型训练中也经常使用稠密梯度与分布式参数切分。
+
+#### 用 PyTorch 直接观察查表与梯度累加
+
+```python
+import torch
+from torch.nn import functional as F
+
+weight = torch.tensor([
+    [ 0.8,  0.2],
+    [ 0.7,  0.3],
+    [-0.4,  0.9],
+], requires_grad=True)
+
+input_ids = torch.tensor([[2, 0, 2]], dtype=torch.long)
+
+# F.embedding 的语义就是用 input_ids 从 weight 中查行。
+hidden = F.embedding(input_ids, weight)
+print(hidden.shape)       # torch.Size([1, 3, 2])
+print(hidden[0, 0])       # tensor([-0.4000, 0.9000])，即 weight[2]
+print(hidden[0, 2])       # 同样是 weight[2]
+
+# 为便于观察，让每个输出元素对 loss 的梯度都为 1。
+loss = hidden.sum()
+loss.backward()
+print(weight.grad)
+# tensor([[1., 1.],
+#         [0., 0.],
+#         [2., 2.]])
+```
+
+第 0 行被访问一次，所以梯度是 `[1, 1]`；第 1 行没有被访问，所以是 `[0, 0]`；第 2 行被访问两次，梯度累加为 `[2, 2]`。
+
+#### 工程边界
+
+- Token ID 必须是整数，并满足 `0 <= id < V`；越界索引通常会直接报错。
+- `padding_idx` 可以让指定 padding 行不参与常规梯度更新，但它仍然是词表中的合法行。
+- 查表只负责从参数矩阵取出初始向量，不负责 Attention，也不会让向量自动带上上下文。
+- `gather` 是通用张量操作，而 `nn.Embedding` / `F.embedding` 是面向 Embedding 的专用接口，还可处理 `padding_idx`、稀疏梯度和最大范数等选项。
+- 在 GPU 上，查表常受内存访问效率影响；连续矩阵乘法更容易充分利用计算单元，因此大规模系统还会关注词表切分、通信和内存布局。
+
 ### 用 NumPy 手工实现
 
 ```python
@@ -849,7 +965,7 @@ Embedding 相似度只表示模型认为两段内容在训练出的空间中接�
 
 3. **为什么查表等价于 one-hot 乘矩阵，但实现不创建 one-hot？**
    - **答案：** one-hot 向量只有 Token ID 对应位置为 1，与 `E` 相乘时恰好保留对应行；但显式 one-hot 的长度等于整个词表，绝大多数元素都是 0，浪费内存和乘法，因此框架直接执行 gather/index lookup。
-   - **原文依据：** [为什么也可以写成 one-hot 乘矩阵](#为什么也可以写成-one-hot-乘矩阵)。
+   - **原文依据：** [为什么也可以写成 one-hot 乘矩阵](#为什么也可以写成-one-hot-乘矩阵)与[Gather / Index Lookup 到底是什么](#gather-index-lookup-到底是什么)。
 
 4. **Embedding 参数如何通过交叉熵、反向传播和优化器更新？**
    - **答案：** 模型先用 Embedding 和后续网络预测下一个 token，交叉熵衡量预测概率与正确 token 的差距；反向传播通过链式法则得到被读取 Embedding 行的梯度，SGD 或 AdamW 再沿降低损失的方向更新这些参数。重复出现的同一 ID 会累加各位置的梯度贡献。
