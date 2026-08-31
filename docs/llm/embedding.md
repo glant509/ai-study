@@ -837,6 +837,44 @@ Embedding 相似度只表示模型认为两段内容在训练出的空间中接�
 - 能区分 Embedding 模型与 HNSW/IVF 等检索算法。
 - 能根据向量数量、维度和数据类型估算基础存储成本。
 
+### 检查表答案与原文依据
+
+1. **`E.shape = [vocab_size, hidden_size]` 的两个维度分别是什么？**
+   - **答案：** `vocab_size` 是词表中的 token 数量，每个 token 对应矩阵一行；`hidden_size` 是每个 token 向量的维度，也是该行包含的浮点参数数量。
+   - **原文依据：** [Embedding 矩阵是什么](#embedding-矩阵是什么)。
+
+2. **一个 Token ID 怎样取出 Embedding 矩阵的一行？**
+   - **答案：** Token ID 就是行索引。若 `token_id = 2`，前向计算执行 `E[2]`，返回矩阵第 2 行、长度为 `hidden_size` 的向量；batch 和 sequence 只是同时执行多次相同的索引操作。
+   - **原文依据：** [前向计算：按 Token ID 取矩阵的一行](#前向计算-按-token-id-取矩阵的一行)和[用 NumPy 手工实现](#用-numpy-手工实现)。
+
+3. **为什么查表等价于 one-hot 乘矩阵，但实现不创建 one-hot？**
+   - **答案：** one-hot 向量只有 Token ID 对应位置为 1，与 `E` 相乘时恰好保留对应行；但显式 one-hot 的长度等于整个词表，绝大多数元素都是 0，浪费内存和乘法，因此框架直接执行 gather/index lookup。
+   - **原文依据：** [为什么也可以写成 one-hot 乘矩阵](#为什么也可以写成-one-hot-乘矩阵)。
+
+4. **Embedding 参数如何通过交叉熵、反向传播和优化器更新？**
+   - **答案：** 模型先用 Embedding 和后续网络预测下一个 token，交叉熵衡量预测概率与正确 token 的差距；反向传播通过链式法则得到被读取 Embedding 行的梯度，SGD 或 AdamW 再沿降低损失的方向更新这些参数。重复出现的同一 ID 会累加各位置的梯度贡献。
+   - **原文依据：** [Embedding 数值是怎样学习出来的](#embedding-数值是怎样学习出来的)、[交叉熵损失](#交叉熵损失)、[哪些行会收到梯度](#哪些行会收到梯度)和[一个可以手算的二维更新例子](#一个可以手算的二维更新例子)。
+
+5. **Token Embedding、上下文化表示和文本 Embedding 有什么区别？**
+   - **答案：** Token Embedding 是按 ID 查表得到的初始向量，同一 ID 初始值固定；上下文化表示是该向量经过 Transformer 后的逐位置 hidden state，会随上下文变化；文本 Embedding 则把整句或整段的 hidden states 经过 Pooling、Projection 和归一化压缩为用于检索或相似度计算的固定长度向量。
+   - **原文依据：** [第一类：模型内部的 Token Embedding](#第一类-模型内部的-token-embedding)、[为什么语义相近的 token 会靠近](#为什么语义相近的-token-会靠近)和[第二类：用于检索的文本 Embedding](#第二类-用于检索的文本-embedding)。
+
+6. **Mean、CLS 与 Last-token Pooling 分别适合什么情况？**
+   - **答案：** Mean Pooling 汇总所有有效 token，适合模型按平均池化目标训练的场景；CLS Pooling 取专用首 token，前提是训练明确让该位置承载全局语义；Last-token Pooling 常用于因果模型，因为最后一个有效位置能够看到此前上下文。实际使用必须遵循模型训练时的 Pooling 约定。
+   - **原文依据：** [Mean Pooling](#mean-pooling)、[CLS Pooling](#cls-pooling)和[Last-token Pooling](#last-token-pooling)。
+
+7. **余弦相似度和对比学习损失分别表达什么？**
+   - **答案：** 余弦相似度衡量两个向量方向的一致程度，忽略绝对长度；对比学习损失则在训练时提高正样本对的相似度、降低负样本对的相似度，从而塑造适合语义检索的向量空间。
+   - **原文依据：** [余弦相似度](#余弦相似度)和[文本 Embedding 用什么训练算法](#文本-embedding-用什么训练算法)。
+
+8. **Embedding 模型与 HNSW、IVF 等检索算法有什么区别？**
+   - **答案：** Embedding 模型负责把文本映射为语义向量；HNSW、IVF、PQ 等算法负责在已有向量集合中近似寻找邻居。前者决定向量表达的语义质量，后者主要决定检索速度、内存占用和召回率之间的权衡。
+   - **原文依据：** [Embedding 计算与向量检索不是同一个算法](#embedding-计算与向量检索不是同一个算法)。
+
+9. **怎样估算向量的基础存储成本？**
+   - **答案：** 基础向量数据量约为 `向量数量 × 向量维度 × 每个元素字节数`。例如 100 万个 1536 维 FP32 向量约占 `1,000,000 × 1536 × 4 ≈ 6.14 GB`；实际系统还要额外计算 HNSW/IVF 索引、元数据、副本和数据库管理开销。
+   - **原文依据：** [向量维度影响成本](#向量维度影响成本)。
+
 ## 中文延伸学习资源
 
 下面三组资源分别补充经典词向量、现代 LLM 体系和 Embedding 代码实现。阅读时要继续区分 Word2Vec 静态词向量、LLM 的 Token Embedding 和用于检索的文本 Embedding：
