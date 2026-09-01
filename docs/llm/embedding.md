@@ -350,14 +350,34 @@ input_ids.shape = [2, 3]
 
 接下来每次都先从 `input_ids` 的某个位置读出整数 ID，再用这个 ID 选择 `E` 的一行：
 
-| `input_ids` 的位置 | 读到的 ID | 对应 Token | 执行的查表 | 写入 `hidden` 的位置和值 |
-| --- | ---: | --- | --- | --- |
-| `[0, 0]` | 1 | 猫 | `E[1, :]` | `hidden[0, 0, :] = [0.8, 0.1, -0.2]` |
-| `[0, 1]` | 2 | 喜欢 | `E[2, :]` | `hidden[0, 1, :] = [0.2, 0.7, 0.3]` |
-| `[0, 2]` | 3 | 鱼 | `E[3, :]` | `hidden[0, 2, :] = [0.6, -0.1, 0.5]` |
-| `[1, 0]` | 4 | 狗 | `E[4, :]` | `hidden[1, 0, :] = [0.7, 0.2, -0.3]` |
-| `[1, 1]` | 2 | 喜欢 | `E[2, :]` | `hidden[1, 1, :] = [0.2, 0.7, 0.3]` |
-| `[1, 2]` | 3 | 鱼 | `E[3, :]` | `hidden[1, 2, :] = [0.6, -0.1, 0.5]` |
+<div class="embedding-lookup-table">
+  <table>
+    <colgroup>
+      <col class="embedding-lookup-table__position">
+      <col class="embedding-lookup-table__id">
+      <col class="embedding-lookup-table__token">
+      <col class="embedding-lookup-table__source">
+      <col class="embedding-lookup-table__result">
+    </colgroup>
+    <thead>
+      <tr>
+        <th><code>input_ids</code> 的位置</th>
+        <th>读到的 ID</th>
+        <th>Token</th>
+        <th>执行的查表</th>
+        <th>写入 <code>hidden</code> 的位置和值</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>[0, 0]</code></td><td>1</td><td>猫</td><td><code>E[1, :]</code></td><td><code>hidden[0, 0, :] = [0.8, 0.1, -0.2]</code></td></tr>
+      <tr><td><code>[0, 1]</code></td><td>2</td><td>喜欢</td><td><code>E[2, :]</code></td><td><code>hidden[0, 1, :] = [0.2, 0.7, 0.3]</code></td></tr>
+      <tr><td><code>[0, 2]</code></td><td>3</td><td>鱼</td><td><code>E[3, :]</code></td><td><code>hidden[0, 2, :] = [0.6, -0.1, 0.5]</code></td></tr>
+      <tr><td><code>[1, 0]</code></td><td>4</td><td>狗</td><td><code>E[4, :]</code></td><td><code>hidden[1, 0, :] = [0.7, 0.2, -0.3]</code></td></tr>
+      <tr><td><code>[1, 1]</code></td><td>2</td><td>喜欢</td><td><code>E[2, :]</code></td><td><code>hidden[1, 1, :] = [0.2, 0.7, 0.3]</code></td></tr>
+      <tr><td><code>[1, 2]</code></td><td>3</td><td>鱼</td><td><code>E[3, :]</code></td><td><code>hidden[1, 2, :] = [0.6, -0.1, 0.5]</code></td></tr>
+    </tbody>
+  </table>
+</div>
 
 把结果仍然按照“第几句话、句中第几个位置”的结构排列：
 

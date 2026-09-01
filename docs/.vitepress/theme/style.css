@@ -26,6 +26,32 @@ body { letter-spacing: .01em; }
 .vp-doc h1 { letter-spacing: -.035em; line-height: 1.22; }
 .vp-doc h2 { border-top: 1px solid var(--vp-c-divider); padding-top: 28px; margin-top: 48px; }
 .vp-doc table { display: table; width: 100%; }
+.embedding-lookup-table {
+  width: 100%;
+  margin: 20px 0;
+  overflow-x: auto;
+}
+.vp-doc .embedding-lookup-table table {
+  width: 100%;
+  min-width: 860px;
+  margin: 0;
+  table-layout: fixed;
+}
+.embedding-lookup-table__position { width: 118px; }
+.embedding-lookup-table__id { width: 82px; }
+.embedding-lookup-table__token { width: 70px; }
+.embedding-lookup-table__source { width: 108px; }
+.embedding-lookup-table__result { width: auto; }
+.vp-doc .embedding-lookup-table th,
+.vp-doc .embedding-lookup-table td {
+  padding-right: 10px;
+  padding-left: 10px;
+  white-space: nowrap;
+}
+.vp-doc .embedding-lookup-table th:nth-child(2),
+.vp-doc .embedding-lookup-table td:nth-child(2) {
+  text-align: center;
+}
 .vp-doc div[class*='language-'] { border: 1px solid var(--vp-c-divider); }
 .VPFeature { border: 1px solid var(--vp-c-divider) !important; background: var(--vp-c-bg-soft) !important; }
 .VPHero .name, .VPHero .text { max-width: 760px; }
