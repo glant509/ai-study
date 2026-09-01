@@ -361,7 +361,7 @@ input_ids.shape = [2, 3]
     </colgroup>
     <thead>
       <tr>
-        <th><code>input_ids</code> 的位置</th>
+        <th><code>input_ids</code><br>的位置</th>
         <th>读到的 ID</th>
         <th>Token</th>
         <th>执行的查表</th>

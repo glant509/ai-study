@@ -52,6 +52,10 @@ body { letter-spacing: .01em; }
 .vp-doc .embedding-lookup-table td:nth-child(2) {
   text-align: center;
 }
+.vp-doc .embedding-lookup-table th:first-child {
+  line-height: 1.45;
+  white-space: normal;
+}
 .vp-doc div[class*='language-'] { border: 1px solid var(--vp-c-divider); }
 .VPFeature { border: 1px solid var(--vp-c-divider) !important; background: var(--vp-c-bg-soft) !important; }
 .VPHero .name, .VPHero .text { max-width: 760px; }
