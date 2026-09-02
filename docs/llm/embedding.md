@@ -1,4 +1,4 @@
-# Embedding 与张量：模型如何把编号变成语义空间
+# Embedding：从 Token ID、向量表示到下一个 Token
 
 Tokenizer 输出的是整数 ID，例如 `[18327, 7864, 221]`。这些整数只是词表行号，数值大小没有语义：ID `100` 与 ID `101` 不一定相似，ID `100` 与 ID `50000` 也不一定无关。神经网络需要可进行加法、乘法和梯度更新的浮点数，因此首先要把每个离散 ID 转换成一个连续向量。这个过程就是 Embedding。
 
@@ -1493,24 +1493,408 @@ h_t^(0) = token_embedding[token_id_t] + position_embedding[t]
 - Modality Embedding：区分文字、图像或音频；
 - Role Embedding：在特定架构中区分消息角色。
 
-## 输出层与 Weight Tying
+## 从 input_ids 到下一个 Token：完整预测流程
 
-生成模型最后要把隐藏向量重新映射为整个词表的分数。若最后一个位置的隐藏向量是 `h`，输出矩阵是 `W_out`：
+到目前为止，我们已经知道 `input_ids` 如何通过 Embedding 矩阵变成向量。但必须明确：**仅靠 Embedding 查表不能预测下一个 Token。** Embedding 层只完成“离散编号 → 初始浮点向量”的转换，后面还需要位置信息、多层 Transformer、输出投影、Softmax 和解码策略。
 
-```text
-logits = h · W_out^T
-logits.shape = [vocab_size]
+完整流程是：
+
+```mermaid
+flowchart LR
+  A[input_ids] --> B[Embedding 查表]
+  B --> C[加入位置信息]
+  C --> D[多层 Transformer]
+  D --> E[上下文化 Hidden States]
+  E --> F[输出投影到整个词表]
+  F --> G[Logits]
+  G --> H[Softmax 概率]
+  H --> I[解码策略]
+  I --> J[下一个 Token ID]
 ```
 
-经过 Softmax 后得到下一个 token 的概率。
+下面使用输入“我喜欢吃”逐步展开。为了便于展示，假设 Tokenizer 得到：
 
-很多模型采用 Weight Tying：输入 Embedding 矩阵和输出投影矩阵共享权重，即：
+```text
+文本：我 喜欢 吃
+
+input_ids = [10, 25, 83]
+```
+
+真实 Token ID 由具体模型的 Tokenizer 决定，这里的数字仅用于说明流程。
+
+### 第 1 步：Embedding 查表得到初始向量
+
+假设隐藏维度 `D = 4`，Embedding 矩阵中相关行是：
+
+```text
+E[10] = [0.2, 0.8, -0.1, 0.3]  # 我
+E[25] = [0.7, 0.1,  0.4, 0.2]  # 喜欢
+E[83] = [0.1, 0.5, -0.3, 0.9]  # 吃
+```
+
+Gather 按照 `[10,25,83]` 依次取行：
+
+```text
+initial_hidden = [
+  [0.2, 0.8, -0.1, 0.3],  # E[10]：我
+  [0.7, 0.1,  0.4, 0.2],  # E[25]：喜欢
+  [0.1, 0.5, -0.3, 0.9]   # E[83]：吃
+]
+
+initial_hidden.shape = [3, 4] = [S, D]
+```
+
+此时最后一行只是 Token“吃”的初始表示。无论前面是“我喜欢”还是“不要继续”，只要 Token ID 都是 `83`，查表得到的 `E[83]` 就相同。因此，仅凭这一行还不知道当前完整上下文是“我喜欢吃”。
+
+### 第 2 步：让模型知道 Token 的位置
+
+如果只有三个 Token 向量，模型还需要知道它们的先后顺序：
+
+```text
+位置 0：我
+位置 1：喜欢
+位置 2：吃
+```
+
+经典绝对位置 Embedding 可以概念化为：
+
+```text
+x[0] = E[我]   + Position[0]
+x[1] = E[喜欢] + Position[1]
+x[2] = E[吃]   + Position[2]
+```
+
+现代生成模型常使用 RoPE。RoPE 通常不是直接给输入向量加一个位置向量，而是在 Attention 内旋转 Query 和 Key，使点积带有相对位置信息。实现方式不同，但目标相同：让模型区分“我喜欢吃”与“吃喜欢我”。
+
+### 第 3 步：Self-Attention 让每个位置读取前文
+
+自回归语言模型使用因果掩码（Causal Mask），保证当前位置不能偷看未来 Token：
+
+```text
+位置 0“我”   可以看：我
+位置 1“喜欢” 可以看：我、喜欢
+位置 2“吃”   可以看：我、喜欢、吃
+```
+
+可以把允许查看的关系画成下三角矩阵，其中 `1` 表示允许 Attention，`0` 表示屏蔽：
+
+```text
+               Key 位置
+              我  喜欢  吃
+Query 我       1    0    0
+位置  喜欢     1    1    0
+      吃       1    1    1
+```
+
+最后一个位置“吃”通过 Self-Attention 读取前面的“我”和“喜欢”。Attention 并不是简单把三个向量相加，而是把每个位置映射成 Query、Key、Value，计算相关性分数，再对 Value 加权汇总。经过 Attention、MLP、残差连接和归一化后，每个位置得到新的向量。
+
+### 第 4 步：多层 Transformer 形成上下文化表示
+
+一层 Transformer 的输出会成为下一层输入。经过许多层后：
+
+```text
+初始向量：E[吃]
+    ↓ 读取前文并经过多层非线性变换
+最终向量：h_last
+```
+
+`h_last` 不再只表示词典意义上的“吃”，而是近似表达：
+
+```text
+“出现在‘我喜欢’之后、当前需要继续预测的‘吃’”
+```
+
+为了演示，假设最后一层在最后一个位置输出：
+
+```text
+h_last = [0.6, -0.2, 0.9, 0.4]
+h_last.shape = [D] = [4]
+```
+
+这个向量的单独维度通常没有人工指定的含义，语境信息分布在整个向量及多层网络参数中。
+
+同一个 Token 在不同上下文中，初始 Embedding 相同，最终隐藏状态可以不同：
+
+```text
+“我喜欢吃”中的“吃” → h_last_A
+“这种药不能吃”中的“吃” → h_last_B
+
+E[吃] 相同，但 h_last_A 通常不等于 h_last_B
+```
+
+### 第 5 步：输出投影为词表中每个 Token 计算分数
+
+`h_last` 只有 `D = 4` 个数，但模型要在整个词表中选择下一个 Token。若词表大小为 `V = 100,000`，就必须把 `[D]` 映射为 `[V]`。
+
+输出层包含矩阵：
+
+```text
+W_out.shape = [V, D]
+```
+
+计算可以写作：
+
+```text
+logits = h_last · W_outᵀ + bias
+
+h_last.shape = [D]
+W_outᵀ.shape = [D, V]
+logits.shape = [V]
+```
+
+词表中的每个候选 Token 都得到一个 Logit：
+
+```text
+Token        Logit
+苹果          4.8
+米饭          3.9
+汽车          0.2
+北京          0.7
+睡觉         -0.4
+……            ……
+```
+
+Logit 是未经归一化的候选分数：
+
+- 可以是正数或负数；
+- 不要求位于 `0～1`；
+- 所有 Logit 不要求相加等于 1；
+- 相对大小比绝对值更重要，Logit 越高，模型越倾向选择该 Token。
+
+模型在这里并不是从词典中检索一条现成回答，而是使用同一个上下文向量，一次性对词表中的所有候选 Token 打分。
+
+### 第 6 步：Weight Tying 如何复用 Embedding 矩阵
+
+输入 Embedding 矩阵的形状是：
+
+```text
+E.shape = [V, D]
+```
+
+输出矩阵 `W_out` 也可以是 `[V,D]`。许多模型采用 Weight Tying，让两者共享同一组参数：
 
 ```text
 W_out = E
 ```
 
-这样既减少参数，又让“读取 token 表示”和“预测 token”共享同一空间。但是否共享取决于具体模型架构，不能一概而论。
+此时某个候选 Token `i` 的 Logit 可以近似理解为：
+
+```text
+logit_i = h_last · E[i] + bias_i
+```
+
+也就是将当前上下文表示 `h_last` 与每个候选 Token 的向量做点积。若方向更匹配，点积往往更大，候选分数也更高。
+
+Weight Tying 有两个直观作用：
+
+1. 输入时用这张表“读取 Token 表示”，输出时用同一张表“判断哪个 Token 与当前上下文匹配”；
+2. 避免再保存一张同样大小的独立输出矩阵，减少参数量。
+
+但不是所有模型都共享权重。有些架构使用独立输出矩阵，有些还会在输出前增加 LayerNorm 或其他变换，应以具体模型配置和源码为准。
+
+### 第 7 步：Softmax 把 Logit 转换成概率
+
+为了演示，假设只保留四个候选 Logit：
+
+```text
+苹果： 4.8
+米饭： 3.9
+汽车： 0.2
+睡觉：-0.4
+```
+
+Softmax 的计算是：
+
+```text
+P(token_i) = exp(logit_i) / Σ exp(logit_j)
+```
+
+它先对每个 Logit 取指数，再除以所有指数值的总和。结果可能近似为：
+
+```text
+苹果：约 70.3%
+米饭：约 28.6%
+汽车：约  0.7%
+睡觉：约  0.4%
+```
+
+Softmax 输出满足：
+
+```text
+每个概率 >= 0
+所有概率之和 = 1
+```
+
+这表示模型认为：在“我喜欢吃”之后，“苹果”最可能，“米饭”次之。概率不是事实保证，只是模型根据训练数据和当前上下文给出的条件分布。
+
+实际实现常不会先把所有概率完整展示出来；为了数值稳定和性能，框架可能直接在 Logit 上完成后续筛选或使用 Log-Softmax，但数学含义相同。
+
+### 第 8 步：解码策略从概率分布中选择 Token
+
+拥有概率分布后，还需要决定怎样选出具体 Token。
+
+#### Greedy / Argmax
+
+直接选择概率最大的候选：
+
+```text
+next_token_id = argmax(logits)
+```
+
+示例会选择“苹果”。这种方式确定、可复现，但可能使输出过于保守或出现重复。
+
+#### Temperature
+
+Temperature 在 Softmax 前缩放 Logit：
+
+```text
+probabilities = softmax(logits / temperature)
+```
+
+- 温度较低：高分候选更加突出，结果更确定；
+- 温度较高：分布更平坦，低分候选也更有机会，结果更多样；
+- 温度接近 0 时，行为趋近于选择最大 Logit。
+
+Temperature 不会让模型学到新知识，它只改变当前分布的尖锐程度。
+
+#### Top-k Sampling
+
+只保留 Logit 最高的 `k` 个候选，将其余候选排除，再从保留集合中采样。例如 `k = 2` 时只保留“苹果”和“米饭”。
+
+#### Top-p / Nucleus Sampling
+
+将候选按概率从高到低排列，选择累计概率达到阈值 `p` 的最小集合，再从中采样。候选集合大小会随当前分布变化：模型非常确定时集合较小，不确定时集合较大。
+
+生产系统还可能结合重复惩罚、频率惩罚、Presence Penalty、禁止 Token 列表或语法约束。它们都在模型产生 Logit 之后影响最终选择，不属于 Embedding 查表本身。
+
+### 第 9 步：把选出的 Token 追加到输入并继续生成
+
+假设本轮选择了“苹果”，系统将其 ID 追加到已有序列：
+
+```text
+原序列：我 喜欢 吃
+追加后：我 喜欢 吃 苹果
+```
+
+模型再根据新序列预测下一个 Token：
+
+```text
+我 喜欢 吃 苹果 → 预测“。”
+我 喜欢 吃 苹果 。 → 预测下一个 Token
+```
+
+这个循环持续到以下任一条件发生：
+
+- 生成 EOS 等结束 Token；
+- 达到最大输出 Token 数；
+- 命中停止字符串或其他停止规则；
+- 用户或系统中断；
+- 结构化输出解码器判定内容已完成。
+
+真实推理不会每一步都从头重复计算全部前文。Transformer 通常使用 KV Cache 保存此前各层的 Key 和 Value，新一步主要计算新增 Token 的部分，从而显著降低自回归生成成本。但每一步仍然要产生新的词表 Logit 并选择下一个 Token。
+
+### 第 10 步：为什么使用最后一个有效位置预测
+
+输入“我喜欢吃”经过 Transformer 后，每个位置都有自己的最终隐藏向量：
+
+```text
+h[0]：已经看过“我”
+h[1]：已经看过“我 喜欢”
+h[2]：已经看过“我 喜欢 吃”
+```
+
+继续生成时，需要基于完整前文预测，所以使用最后一个有效位置：
+
+```text
+next_token_logits = output_projection(h[2])
+```
+
+如果 batch 使用 Padding，“最后一个数组位置”不一定是真实文本的最后位置，必须根据 `attention_mask` 或序列长度找到每条样本的最后一个有效 Token。
+
+训练时情况稍有不同。因果语言模型可以一次并行计算所有位置的下一个 Token 预测：
+
+| 当前可见内容 | 该位置的训练目标 |
+| --- | --- |
+| 我 | 喜欢 |
+| 我 喜欢 | 吃 |
+| 我 喜欢 吃 | 苹果 |
+
+这通常通过把标签相对输入错开一位（shift）实现。虽然训练能并行处理各位置，生成时未知的下一个 Token 必须先选出来并追加，所以自回归推理仍然逐 Token 进行。
+
+### 完整张量形状如何变化
+
+假设：
+
+```text
+B = 2        # 两条输入
+S = 3        # 每条输入当前占 3 个位置
+D = 4096     # 隐藏维度
+V = 100000   # 词表大小
+```
+
+形状依次变化：
+
+```text
+input_ids
+[B, S] = [2, 3]
+
+    ↓ Embedding Gather
+
+initial_hidden
+[B, S, D] = [2, 3, 4096]
+
+    ↓ 多层 Transformer
+
+contextual_hidden
+[B, S, D] = [2, 3, 4096]
+
+    ↓ 输出投影 W_outᵀ
+
+logits
+[B, S, V] = [2, 3, 100000]
+
+    ↓ 取每条样本最后一个有效位置
+
+next_token_logits
+[B, V] = [2, 100000]
+
+    ↓ 解码策略
+
+next_token_ids
+[B] = [2]
+```
+
+在训练时保留 `[B,S,V]`，以便同时计算每个位置的交叉熵；在生成时通常只关心最后一个有效位置的 `[B,V]`。
+
+### 一段接近真实代码的伪实现
+
+```python
+def predict_next_token(input_ids, attention_mask):
+    # [B, S] → [B, S, D]：按 ID 读取初始向量。
+    hidden = token_embedding(input_ids)
+
+    # [B, S, D] → [B, S, D]：融合位置和上下文。
+    hidden = transformer(hidden, attention_mask=attention_mask)
+
+    # 找到每条样本最后一个真实 Token 的位置。
+    # 此写法假设使用右侧 Padding；左侧 Padding 需要采用相应索引规则。
+    last_positions = attention_mask.sum(dim=1) - 1
+    batch_indices = range(input_ids.shape[0])
+    last_hidden = hidden[batch_indices, last_positions]
+
+    # [B, D] → [B, V]：为整个词表生成候选分数。
+    logits = output_projection(last_hidden)
+
+    # Temperature、Top-k、Top-p 等策略选择下一个 ID。
+    next_token_ids = decode(logits)
+    return next_token_ids
+```
+
+这段代码省略了 RoPE、KV Cache、LayerNorm、分布式词表投影等实现细节，但清楚展示了各组件的职责边界。
+
+最关键的结论是：
+
+> Embedding 矩阵只负责把离散 Token ID 转换成初始向量；Transformer 负责将位置和前文信息融合成上下文化表示；输出层再把最后位置的上下文向量转换成整个词表的候选分数，Softmax 与解码策略最终选出下一个 Token。
 
 ## 第二类：用于检索的文本 Embedding
 

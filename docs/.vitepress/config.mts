@@ -65,7 +65,7 @@ export default withMermaid(defineConfig({
         { text: '01 · LLM 基础', collapsed: false, items: [
           { text: '模块导读', link: '/llm/' },
           { text: 'Tokenizer', link: '/llm/tokenizer' },
-          { text: 'Embedding 与张量', link: '/llm/embedding' },
+          { text: 'Embedding 与预测', link: '/llm/embedding' },
           { text: 'Attention', link: '/llm/attention' },
           { text: 'Transformer', link: '/llm/transformer' },
           { text: 'RoPE', link: '/llm/rope' },
