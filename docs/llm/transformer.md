@@ -153,7 +153,261 @@ logits.shape = [B, S, V]
 
 ## 一个 Transformer Block 的整体结构
 
-现代 Decoder-only 模型常采用 Pre-Norm：
+看到下面的代码和公式之前，先不要把 Transformer Block 想成一个巨大黑盒。它其实是一个**反复执行两次“读取旧状态、计算增量、合并增量”**的处理单元：
+
+```text
+第一次更新：让每个 Token 通过 Attention 读取其他位置的信息
+第二次更新：让每个 Token 通过 MLP 加工自己当前位置的特征
+```
+
+一个 Block 不直接输出自然语言，也不直接预测最终答案。它接收一组 Token 的 Hidden States，进行一次上下文交换和一次位置内计算，然后把同形状的新 Hidden States 交给下一个 Block。
+
+### 先分清 Model、Block、子层和算子
+
+这些名称经常混用，容易让读者以为每出现一个“层”就是一套完整模型：
+
+| 名称 | 本章中的含义 | 例子 |
+| --- | --- | --- |
+| Model | 完整语言模型 | Embedding + 32 个 Block + LM Head |
+| Transformer Block | 可重复堆叠的主计算单元 | 第 7 个 Decoder Block |
+| Sublayer / 子层 | Block 内承担一种职责的模块 | Attention 子层、MLP 子层 |
+| Linear Layer | 一次带参数的线性投影 | `x @ W_Q`、`x @ W_up` |
+| Operator / 算子 | 更细粒度张量操作 | 加法、Softmax、SiLU、矩阵乘法 |
+
+假设某模型有 32 个 Block，不是说模型只执行 32 个矩阵乘法。每个 Block 内部又有多次 Q/K/V/O 投影、Attention、MLP 投影、Norm 和残差加法。
+
+### Block 的输入和输出究竟是什么
+
+假设当前 Batch 有 2 条序列，每条补齐到 4 个 Token，隐藏维度是 8：
+
+```text
+X.shape = [B, S, D] = [2, 4, 8]
+```
+
+它不是一张简单的二维词表，而是三层数据：
+
+```text
+X[
+  第几条序列 b,
+  这条序列中的第几个 Token s,
+  该 Token 的第几个隐藏特征 d
+]
+```
+
+例如：
+
+```text
+X[1, 2, :]  # 第 1 条序列、第 2 个 Token 的完整 8 维向量
+X[1, 2, 5]  # 上述向量的第 5 个数
+```
+
+Block 输出：
+
+```text
+Y.shape = [2, 4, 8]
+```
+
+形状没变，不代表内容没变。输入 `X[1,2,:]` 可能主要表示当前 Token 自身，输出 `Y[1,2,:]` 已经加入其他位置的信息，并经过 MLP 重新组合特征。
+
+### 什么是“特征”或“通道”
+
+隐藏向量中的每一个位置常称为一个 feature dimension 或 channel：
+
+```text
+x = [0.18, -0.42, 0.07, ..., 0.31]
+      dim0   dim1   dim2       dimD-1
+```
+
+不要把某一维直接命名为“是否是人”“是否是主语”。真实模型的信息通常分布在许多维度及其组合方向上。这里说“MLP 加工特征”，指对这些浮点维度做训练得到的线性变换、门控和非线性计算。
+
+### 什么是残差流
+
+残差流不是额外的一张特殊缓存，而是贯穿各 Block 的主 Hidden State 张量。可以把它想成一个不断追加修订意见的工作文档：
+
+```text
+初始文档：Token Embedding 与位置信息
+第 1 个 Attention：补充 Token 间关系
+第 1 个 MLP：补充位置内变换结果
+第 2 个 Attention：基于更新后的文档继续关联
+...
+```
+
+每个子层读取主状态，生成同形状增量，再通过加法合并回去：
+
+```text
+新主状态 = 旧主状态 + 子层增量
+```
+
+“增量”不是 Git Diff 格式，也不要求数值很小；它只是指子层输出通过加法合入，而不是彻底替换输入。
+
+## 用一条服务调用记录贯穿整个 Block
+
+接下来使用一个持续出现的例子：
+
+```text
+payment-service 调用 inventory-service 后发生超时
+```
+
+为了阅读方便，把它粗略表示为 6 个 Token：
+
+```text
+[payment-service] [调用] [inventory-service] [后] [发生] [超时]
+```
+
+真实 Tokenizer 可能把英文服务名拆成多个 Token，这里只为解释 Block 职责而简化。
+
+### 进入 Block 之前
+
+假设当前是第 5 个 Block。此时每个位置已经经过前 4 个 Block，不再只是原始词义：
+
+```text
+X[0]：包含 payment-service 及此前层形成的信息
+X[1]：包含“调用”及可能的调用关系线索
+X[2]：包含 inventory-service 及实体线索
+X[3]：包含时序连接“后”的信息
+X[4]：包含“发生”的事件线索
+X[5]：包含“超时”及当前上下文线索
+```
+
+### 第一步：Norm 为 Attention 准备稳定输入
+
+不同位置向量的数值尺度可能差异很大：
+
+```text
+X[0] 的 RMS = 0.8
+X[5] 的 RMS = 4.6
+```
+
+如果直接进入 Q/K/V 投影，较大的尺度可能导致点积分数和激活不稳定。Norm 对每个 Token 的隐藏维度做尺度调整：
+
+```text
+N1 = Norm1(X)
+```
+
+Norm 不决定“超时应该关注 inventory-service”，也不在 Token 之间传递信息；它只是把数值整理到适合下一个子层处理的尺度。
+
+### 第二步：Attention 跨 Token 读取信息
+
+Attention 接收 `N1`，为每个位置生成 Query、Key、Value。更新“超时”位置时，某些 Head 可能形成类似下面的示意权重：
+
+```text
+payment-service    0.12
+调用               0.08
+inventory-service  0.46
+后                 0.06
+发生               0.10
+超时               0.18
+```
+
+Attention 对相应 Value 加权求和，得到“超时”位置的上下文增量：
+
+```text
+A = Attention(N1)
+```
+
+这份增量可能加强“超时事件与 inventory-service 调用有关”的特征。数字只是帮助理解，真实权重因模型、层和 Head 而异。
+
+### 第三步：第一次残差相加，保留旧信息并加入上下文
+
+如果直接写成：
+
+```text
+X' = A
+```
+
+旧状态完全由 Attention 输出替换。残差结构采用：
+
+```text
+X' = X + A
+```
+
+对“超时”位置就是逐元素相加：
+
+```text
+X'[5, :] = X[5, :] + A[5, :]
+```
+
+因此 `X'[5]` 同时保留旧的“超时”相关表示，并加入本层从其他 Token 聚合来的信息。
+
+### 第四步：再次 Norm，为 MLP 准备输入
+
+Attention 增量加回后，数值分布再次变化，因此使用另一套 Norm 参数：
+
+```text
+N2 = Norm2(X')
+```
+
+`Norm1` 与 `Norm2` 的结构可能相同，但可训练缩放参数通常不是同一份，因为它们服务于不同子层输入。
+
+### 第五步：MLP 在每个位置内部加工特征
+
+MLP 不再读取其他 Token。它对 6 个位置分别应用同一套参数：
+
+```text
+M[0] = MLP(N2[0])
+M[1] = MLP(N2[1])
+...
+M[5] = MLP(N2[5])
+```
+
+“同一套参数”意味着所有位置共享 MLP 权重；“分别应用”意味着 `M[5]` 的计算不直接读取 `N2[2]`。不过 `N2[5]` 已经通过 Attention 吸收了位置 2 的信息，所以 MLP 可以继续加工这些上下文特征。
+
+对“超时”位置，MLP 可能强化某些与“远程调用失败、服务依赖、异常事件”相关的内部特征组合。它不是在执行人工编写的故障规则，而是在训练目标下学习到的非线性变换。
+
+### 第六步：第二次残差相加，得到 Block 输出
+
+```text
+Y = X' + M
+```
+
+对位置 5：
+
+```text
+Y[5, :] = X'[5, :] + M[5, :]
+```
+
+`Y` 作为下一 Block 的输入。下一层 Attention 可以基于本层形成的“调用关系和超时事件”特征继续读取更远的信息，例如前文出现的连接池耗尽日志。
+
+```mermaid
+flowchart TD
+  X[旧状态 X<br/>超时主要包含已有表示] --> N1[Norm1<br/>整理数值尺度]
+  N1 --> A[Attention<br/>读取调用方、被调用方等位置]
+  A --> R1[与旧状态相加]
+  X --> R1
+  R1 --> XP[中间状态 X'<br/>已有表示 + 跨 Token 信息]
+  XP --> N2[Norm2<br/>再次整理尺度]
+  N2 --> M[MLP<br/>逐位置非线性加工]
+  M --> R2[与 X' 相加]
+  XP --> R2
+  R2 --> Y[输出 Y<br/>交给下一 Block]
+```
+
+## 现在再看代码：每个临时变量是什么
+
+现代 Decoder-only 模型常采用 Pre-Norm。把原来只有三行的代码完整展开：
+
+```python
+def block(x):
+    # x：进入本 Block 的残差流，形状 [B,S,D]
+    normed_for_attention = norm1(x)
+
+    # attn_delta：Attention 产生的上下文增量，形状仍为 [B,S,D]
+    attn_delta = attention(normed_for_attention)
+
+    # x_after_attention：第一次残差相加
+    x_after_attention = x + attn_delta
+
+    normed_for_mlp = norm2(x_after_attention)
+
+    # mlp_delta：每个位置内部计算出的增量，形状 [B,S,D]
+    mlp_delta = mlp(normed_for_mlp)
+
+    # output：第二次残差相加，也是下一个 Block 的输入
+    output = x_after_attention + mlp_delta
+    return output
+```
+
+紧凑写法只是把临时变量省略：
 
 ```python
 def block(x):
@@ -162,15 +416,47 @@ def block(x):
     return x
 ```
 
-写成数学形式：
+## 现在再看公式：逐个符号对应代码和例子
+
+第一条公式：
 
 $$
 X' = X + \operatorname{Attention}(\operatorname{Norm}_1(X))
 $$
 
+逐项对应：
+
+| 公式部分 | 代码变量 | 服务调用例子中的含义 |
+| --- | --- | --- |
+| `X` | `x` | 进入当前 Block 的全部 Token 状态 |
+| `Norm₁(X)` | `normed_for_attention` | 为 Attention 整理每个位置的数值尺度 |
+| `Attention(...)` | `attn_delta` | 跨位置读取服务名、调用、超时等信息 |
+| `X + ...` | `x + attn_delta` | 保留旧状态并加入上下文增量 |
+| `X'` | `x_after_attention` | Attention 残差合并后的中间状态 |
+
+第二条公式：
+
 $$
 Y = X' + \operatorname{MLP}(\operatorname{Norm}_2(X'))
 $$
+
+逐项对应：
+
+| 公式部分 | 代码变量 | 服务调用例子中的含义 |
+| --- | --- | --- |
+| `X'` | `x_after_attention` | 已经融合跨 Token 信息的中间状态 |
+| `Norm₂(X')` | `normed_for_mlp` | 为 MLP 再次整理数值尺度 |
+| `MLP(...)` | `mlp_delta` | 每个位置独立进行非线性特征加工 |
+| `X' + ...` | `x_after_attention + mlp_delta` | 保留中间状态并加入 MLP 增量 |
+| `Y` | `output` | 当前 Block 最终输出 |
+
+公式中的括号表示计算顺序。例如：
+
+```text
+Attention(Norm₁(X))
+```
+
+必须先算 `Norm₁(X)`，再把结果交给 Attention；不是先算 Attention 再 Norm。外层的 `X + ...` 最后执行残差相加。
 
 ```mermaid
 flowchart TD
@@ -186,7 +472,7 @@ flowchart TD
   ADD2 --> Y[输出 Y]
 ```
 
-这两条残差支路非常重要：Attention 和 MLP 都不是替换整个主状态，而是计算一个更新量，再加回残差流。
+这两条残差支路非常重要：Attention 和 MLP 都不是替换整个主状态，而是计算一个更新量，再加回残差流。后面的 Normalization、Attention、残差和 MLP 小节，会分别放大这张图中的一个节点。
 
 ## Normalization：为什么子层前要归一化
 
@@ -214,6 +500,36 @@ $$
 $$
 
 `γ` 和 `β` 是可训练参数，`ε` 防止除零。
+
+把公式中的动作拆开：
+
+1. **减去均值 `x-μ`**：把整组数平移到以 0 为中心；
+2. **除以标准差 `√(σ²+ε)`**：把过大或过小的整体尺度调整到较稳定范围；
+3. **乘 `γ`**：允许模型重新放大或缩小每个特征通道；
+4. **加 `β`**：允许模型重新平移每个特征通道。
+
+如果标准化后永远强制均值 0、方差 1，可能限制模型表达。可训练的 `γ、β` 让模型在获得稳定数值基础后，仍能学习适合任务的尺度和偏移。
+
+`ε` 通常是很小的正数。如果某个向量所有维度都相同：
+
+```text
+x = [2, 2, 2]
+σ² = 0
+```
+
+没有 `ε` 就会除以 0。加入 `ε` 后分母仍为正数，也有助于浮点计算稳定。
+
+### LayerNorm 是对哪些数求均值
+
+对 `[B,S,D]` 的 Hidden States，LayerNorm 通常独立处理每个 `(b,s)` 位置的最后一维：
+
+```text
+X[0,0,:] 单独计算一组 μ、σ²
+X[0,1,:] 单独计算另一组 μ、σ²
+...
+```
+
+它不会把不同句子、不同 Token 的数值混在一起求均值。这一点与 BatchNorm 不同，也是语言模型中 LayerNorm/RMSNorm 更常见的重要原因。
 
 ### 一个三维手算
 
@@ -393,6 +709,70 @@ W₂(W₁x) = (W₂W₁)x
 ```
 
 没有激活函数，多层无法表达复杂非线性决策边界。GELU、SiLU 等激活函数让模型对不同特征采用输入相关的非线性响应。
+
+### 一个可手算的“扩维—激活—降维”例子
+
+为了看清 MLP 数据流，使用 ReLU 和极小矩阵。真实现代 LLM 更常使用 SiLU/SwiGLU，但基本的“先扩展、非线性处理、再压回”思路相通。
+
+输入 Token 的二维 Hidden State：
+
+```text
+x = [1, -2]       # D = 2
+```
+
+第一层将 2 维扩展到 3 维：
+
+```text
+W₁ = [[1.0,  0.5, -1.0],
+      [0.5, -1.0,  2.0]]
+
+h = x @ W₁
+```
+
+三个中间特征分别为：
+
+```text
+h₀ = 1×1.0 + (-2)×0.5  =  0.0
+h₁ = 1×0.5 + (-2)×(-1) =  2.5
+h₂ = 1×(-1) + (-2)×2.0 = -5.0
+
+h = [0.0, 2.5, -5.0]   # D_ff = 3
+```
+
+ReLU 把负数截为 0：
+
+```text
+ReLU(h) = [0.0, 2.5, 0.0]
+```
+
+这一步体现非线性：不同输入会打开或关闭不同中间通道。再用第二层压回 2 维：
+
+```text
+W₂ = [[1.0, 0.0],
+      [0.4, 0.8],
+      [0.0, 1.0]]
+
+out = ReLU(h) @ W₂
+```
+
+逐维计算：
+
+```text
+out₀ = 0×1.0 + 2.5×0.4 + 0×0.0 = 1.0
+out₁ = 0×0.0 + 2.5×0.8 + 0×1.0 = 2.0
+
+out = [1.0, 2.0]
+```
+
+这个 `out` 是 MLP 增量，还要通过残差加回输入：
+
+```text
+y = x + out
+  = [1,-2] + [1,2]
+  = [2,0]
+```
+
+例子中的矩阵是人为选来方便计算的。真实模型会通过训练学习矩阵参数，并使用更高维度、门控激活和并行 Kernel。
 
 ### SwiGLU
 
